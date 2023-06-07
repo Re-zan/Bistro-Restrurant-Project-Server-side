@@ -3,6 +3,7 @@ const app = express();
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
+const stripe = require("stripe")(process.env.STRIPE_ACESS_TOKEN);
 const jwt = require("jsonwebtoken");
 const port = process.env.PORT || 5000;
 
@@ -49,6 +50,9 @@ async function run() {
     const userCollections = client.db("bistro-resturantDB").collection("users");
     const menuData = client.db("bistro-resturantDB").collection("menu");
     const reviewData = client.db("bistro-resturantDB").collection("reviews");
+    const payemtCollention = client
+      .db("bistro-resturantDB")
+      .collection("payments");
     const catrsCollections = client
       .db("bistro-resturantDB")
       .collection("carts");
@@ -92,17 +96,18 @@ async function run() {
       res.send(result);
     });
 
-    //user admin
-    app.get("/users/admin", verifyJWT, async (req, res) => {
-      const email = req.query.email;
+    //user delete
+
+    // user admin
+    app.get("/users/admin/:email", verifyJWT, async (req, res) => {
+      const email = req.params.email;
+
+      if (req.decoded.email !== email) {
+        res.send({ admin: false });
+      }
+
       const query = { email: email };
       const user = await userCollections.findOne(query);
-      const decodedEmail = req.decoded.email;
-      if (email !== decodedEmail) {
-        return res
-          .status(403)
-          .send({ error: true, message: "bro you are not authoraized person" });
-      }
       const result = { admin: user?.role === "admin" };
       res.send(result);
     });
@@ -122,6 +127,20 @@ async function run() {
     //get menu datas
     app.get("/menus", async (req, res) => {
       const result = await menuData.find().toArray();
+      res.send(result);
+    });
+
+    //add menu
+    app.post("/menus", verifyJWT, verifyAdmin, async (req, res) => {
+      const menuss = req.body;
+      const result = await menuData.insertOne(menuss);
+      res.send(result);
+    });
+    //data delete
+    app.delete("/menus/:id", verifyJWT, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { $or: [{ _id: new ObjectId(id) }, { _id: id }] };
+      const result = await menuData.deleteOne(query);
       res.send(result);
     });
 
@@ -161,6 +180,36 @@ async function run() {
       const query = { _id: new ObjectId(id) };
       const result = await catrsCollections.deleteOne(query);
       res.send(result);
+    });
+
+    //payment methods start
+    app.post("/create-payment-intent", verifyJWT, async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+
+      // Create a PaymentIntent with the order amount and currency
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+    });
+
+    //payment data insert
+    app.post("/payments", verifyJWT, async (req, res) => {
+      const payment = req.body;
+      const insertResult = await payemtCollention.insertOne(payment);
+
+      const query = {
+        _id: { $in: payment.cartItems.map((id) => new ObjectId(id)) },
+      };
+      const deleteResult = await catrsCollections.deleteMany(query);
+
+      res.send({ insertResult, deleteResult });
     });
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
